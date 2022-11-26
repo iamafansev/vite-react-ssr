@@ -2,51 +2,46 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
+import {createServer as createViteServer, ViteDevServer} from 'vite';
+import chalk from 'chalk';
+import {performance} from 'perf_hooks';
+
+// @ts-ignore
+if (!globalThis.__ssr_start_time) {
+  // @ts-ignore
+  globalThis.__ssr_start_time = performance.now()
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const isTest = process.env.VITEST
+const root = process.cwd();
+const isTest = process.env.VITEST;
+const isProd = process.env.NODE_ENV === 'production';
 
-process.env.MY_CUSTOM_SECRET = 'API_KEY_qwertyuiop'
+const PORT = 5173;
 
-export const createServer = async (
-  root = process.cwd(),
-  isProd = process.env.NODE_ENV === 'production',
-  hmrPort
-) => {
-  const resolve = (p) => path.resolve(__dirname, p)
+const resolve = (p: string) => path.resolve(__dirname, '..', p);
 
+export async function createServer() {
   const indexProd = isProd
     ? fs.readFileSync(resolve('dist/client/index.html'), 'utf-8')
     : ''
 
   const app = express()
 
-  /**
-   * @type {import('vite').ViteDevServer}
-   */
-  let vite
+  let vite: ViteDevServer | undefined = undefined;
   if (!isProd) {
-    vite = await (
-      await import('vite')
-    ).createServer({
+    vite = await createViteServer({
       root,
-      logLevel: isTest ? 'error' : 'info',
       server: {
         middlewareMode: true,
         watch: {
-          // During tests we edit the files too fast and sometimes chokidar
-          // misses change events, so enforce polling for consistency
           usePolling: true,
           interval: 100
         },
-        hmr: {
-          port: hmrPort
-        }
       },
-      appType: 'custom'
     })
-    // use vite's connect instance as middleware
+
     app.use(vite.middlewares)
   } else {
     app.use((await import('compression')).default())
@@ -63,21 +58,20 @@ export const createServer = async (
 
       let template, render
       if (!isProd) {
-        // always read fresh template in dev
         template = fs.readFileSync(resolve('index.html'), 'utf-8')
-        template = await vite.transformIndexHtml(url, template)
-        render = (await vite.ssrLoadModule('/src/entry-server.tsx')).render
+        template = await vite!.transformIndexHtml(url, template)
+        const entryServer = await vite!.ssrLoadModule('/src/entry-server.tsx');
+        render = entryServer.render;
       } else {
         template = indexProd
-        // @ts-ignore
-        render = (await import('./dist/server/entry-server.ts')).render
+        const entryServer = await import(resolve('dist/server/entry-server.js'));
+        render = entryServer.render;
       }
 
       const context = {}
       const appHtml = render(url, context)
 
       if (context.url) {
-        // Somewhere a `<Redirect>` was rendered
         return res.redirect(301, context.url)
       }
 
@@ -85,11 +79,46 @@ export const createServer = async (
 
       res.status(200).set({ 'Content-Type': 'text/html' }).end(html)
     } catch (e) {
-      !isProd && vite.ssrFixStacktrace(e)
-      console.log(e.stack)
-      res.status(500).end(e.stack)
+      !isProd && vite!.ssrFixStacktrace(e as Error)
+      console.log((e as Error).stack)
+      res.status(500).end((e as Error).stack)
     }
   })
 
   return { app, vite }
+}
+
+if (!isTest) {
+  createServer().then(({ app, vite }) =>
+    app.listen(PORT, () => {
+      if (!isProd) {
+        printServerInfo(vite!);
+      }
+    })
+  )
+}
+
+const printServerInfo = (server: ViteDevServer) => {
+  const info = server.config.logger.info
+
+  let ssrReadyMessage = '\n -- SSR mode'
+
+  info(
+    chalk.green(`dev server running at:\n`),
+    { clear: !server.config.logger.hasWarned }
+  )
+
+  info(`http://localhost:${PORT}`);
+
+  // @ts-ignore
+  if (globalThis.__ssr_start_time) {
+    ssrReadyMessage += chalk.cyan(
+      ` ready in ${Math.round(
+        // @ts-ignore
+        performance.now() - globalThis.__ssr_start_time
+      )}ms.`
+    )
+  }
+
+  info(ssrReadyMessage + '\n')
 }

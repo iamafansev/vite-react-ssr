@@ -22,6 +22,34 @@ const PORT = 5173;
 
 const resolve = (p: string) => path.resolve(__dirname, '..', p);
 
+function matchEntryPointByUrl(this: {path: string}, url: string) {
+  return url.startsWith(this.path);
+}
+
+const entries = [
+  {
+    path: '/about',
+    entryTemplate: 'src/entries/about/index.html',
+    entryServer: 'src/entries/about/entry-server.tsx',
+    match: matchEntryPointByUrl,
+  },
+  {
+    path: '/',
+    entryTemplate: 'src/entries/home/index.html',
+    entryServer: 'src/entries/home/entry-server.tsx',
+    match: matchEntryPointByUrl,
+  }
+];
+
+const getEntry = (url: string) => {
+  const entry = entries.find((currentEntry) => currentEntry.match(url));
+  return entry && {
+    path: entry.path,
+    entryTemplate: entry.entryTemplate,
+    entryServer: entry.entryServer
+  };
+}
+
 export async function createServer() {
   const indexProd = isProd
     ? fs.readFileSync(resolve('dist/client/index.html'), 'utf-8')
@@ -40,6 +68,7 @@ export async function createServer() {
           interval: 100
         },
       },
+      appType: 'custom',
     })
 
     app.use(vite.middlewares)
@@ -55,12 +84,17 @@ export async function createServer() {
   app.use('*', async (req, res) => {
     try {
       const url = req.originalUrl
+      const entry = getEntry(url);
+
+      if (!entry) {
+        return res.status(404);
+      };
 
       let template, render
       if (!isProd) {
-        template = fs.readFileSync(resolve('index.html'), 'utf-8')
+        template = fs.readFileSync(resolve(entry.entryTemplate), 'utf-8')
         template = await vite!.transformIndexHtml(url, template)
-        const entryServer = await vite!.ssrLoadModule('/src/entry-server.tsx');
+        const entryServer = await vite!.ssrLoadModule(entry.entryServer);
         render = entryServer.render;
       } else {
         template = indexProd

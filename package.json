@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "dev:spa": "vite",
     "dev": "nodemon --watch src/server.ts --exec 'ts-node --esm --transpileOnly src/server.ts'",
     "serve": "NODE_ENV=production ts-node --esm --transpileOnly src/server.ts",
     "build": "yarn build:client && yarn build:server",
